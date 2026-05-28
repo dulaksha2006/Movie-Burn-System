@@ -232,8 +232,8 @@ def convert_srt_line_to_ass(text):
         if not closing:
             if tag_name == "font":
                 tags = ""
-                cm = re.search(r'color=["\'\\']?([#\w]+)["\'\\']?', attrs, re.I)
-                sm = re.search(r'size=["\'\\']?(\d+)', attrs, re.I)
+                cm = re.search(r"""color=["']?([#\w]+)["']?""", attrs, re.I)
+                sm = re.search(r"""size=["']?(\d+)""", attrs, re.I)
                 if cm:
                     ac = html_color_to_ass(cm.group(1)); color_stack.append(ac); tags += f"\\c{ac}"
                 if sm:
