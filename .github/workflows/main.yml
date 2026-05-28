@@ -65,10 +65,11 @@ jobs:
             /tmp/moviepluz/input_video.mp4 2>/dev/null || echo "1080")
           echo "📐 Source height: ${SRC_H}p"
 
-          # ── Build quality ladder ─────────────────────────────────────────────
-          if   [ "$SRC_H" -ge 2160 ]; then MATRIX='{"quality":[2160,1080,720,480]}'
-          elif [ "$SRC_H" -ge 1080 ]; then MATRIX='{"quality":[1080,720,480]}'
-          elif [ "$SRC_H" -ge  720 ]; then MATRIX='{"quality":[720,480]}'
+          # ── Build quality ladder (nearest-fit — handles non-standard heights) ──
+          # e.g. 1040p → 1080p ladder, 800p → 720p ladder
+          if   [ "$SRC_H" -ge 1920 ]; then MATRIX='{"quality":[2160,1080,720,480]}'
+          elif [ "$SRC_H" -ge  960 ]; then MATRIX='{"quality":[1080,720,480]}'
+          elif [ "$SRC_H" -ge  600 ]; then MATRIX='{"quality":[720,480]}'
           else                              MATRIX='{"quality":[480]}'
           fi
 
