@@ -373,47 +373,29 @@ def cleanup(paths):
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 
 def main():
-    tg_log(f"\U0001f680 <b>MoviePluz Pipeline Started</b> — quality: <b>{TARGET_QUALITY}p</b>")
+    tg_log(f"\U0001f680 <b>MoviePluz Pipeline Started</b> \u2014 quality: <b>{TARGET_QUALITY}p</b>")
 
     movie         = fetch_movie()
     imdb          = movie["imdb"]
     movie_name    = movie["name"]
-    video_url     = movie["dl_link"]
     subtitle_url  = movie["subtitle_link"]
     thumbnail_url = movie.get("backdrop", "")
-    file_type     = detect_file_type(video_url)
 
-    # ── Shared video download (matrix-safe) ──────────────────────────────────
-    # All matrix jobs share the same WORK_DIR. Only the first job to arrive
-    # downloads the video; the others wait for it to appear on disk.
-    input_video   = f"{WORK_DIR}/input_video.mp4"
-    download_lock = f"{WORK_DIR}/.video_downloading"
+    # file_type: prefer env var set by prepare job, fall back to URL detection
+    file_type = os.environ.get("MOVIE_FILE_TYPE", "") or detect_file_type(movie.get("dl_link", ""))
 
-    if os.path.exists(input_video):
-        size_mb = os.path.getsize(input_video) / 1e6
-        tg_log(f"\u23e9 Video already on disk ({size_mb:.1f} MB) \u2014 skipping download.")
-    elif os.path.exists(download_lock):
-        tg_log("\u23f3 Another job is downloading the video \u2014 waiting...")
-        for _ in range(360):          # wait up to 60 minutes
-            time.sleep(10)
-            if os.path.exists(input_video) and not os.path.exists(download_lock):
-                break
-        if not os.path.exists(input_video):
-            tg_log_error("Timed out waiting for shared video download."); sys.exit(1)
-        tg_log("\u2705 Shared video is ready.")
-    else:
-        # This job is the first \u2014 download and hold the lock
-        open(download_lock, "w").close()
-        try:
-            input_video = download_file(video_url, input_video, "Video")
-        finally:
-            try: os.remove(download_lock)
-            except: pass
+    # ── Video: already downloaded by prepare job & placed via artifact ────────
+    input_video = os.environ.get("VIDEO_PATH", f"{WORK_DIR}/input_video.mp4")
+    if not os.path.exists(input_video):
+        tg_log_error(f"Video not found at {input_video} — artifact download may have failed.")
+        sys.exit(1)
+    size_mb = os.path.getsize(input_video) / 1e6
+    tg_log(f"\u2705 Video ready from artifact: <code>{input_video}</code> ({size_mb:.1f} MB)")
 
     # Notify: download accepted
     notify_grand_movie(imdb)
 
-    # Download subtitle & thumbnail (lightweight \u2014 each job can do this)
+    # Download subtitle & thumbnail
     srt_path = download_file(subtitle_url, f"{WORK_DIR}/subtitles.srt", "Subtitle")
     thumbnail_path = None
     if thumbnail_url:
@@ -472,15 +454,9 @@ def main():
     # Notify: upload complete
     notify_uploaded_movie(imdb)
 
-    # Cleanup — shared video is only removed by the last (lowest-quality) job
-    # so other matrix jobs can still read it while encoding.
-    shared_files = ([thumbnail_path] if thumbnail_path else [])
-    encoded_files = list(burned_files.values()) + list(plain_files.values())
-    if not TARGET_QUALITY or TARGET_QUALITY == min(all_qualities):
-        shared_files += [input_video, srt_path]
-    else:
-        shared_files += [srt_path]
-    cleanup(shared_files + encoded_files)
+    # Cleanup — do NOT delete input_video (it's a read-only artifact on this runner)
+    cleanup_files = [srt_path] + ([thumbnail_path] if thumbnail_path else []) + list(burned_files.values()) + list(plain_files.values())
+    cleanup(cleanup_files)
 
     tg_log("\u2705 <b>Pipeline complete.</b>")
     print("\u2705 Pipeline complete.")
