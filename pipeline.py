@@ -73,7 +73,7 @@ CHAT_ID       = _cfg.CHAT_ID
 
 WORK_DIR  = os.environ.get("WORK_DIR", "/tmp/moviepluz")
 FONT_PATH = f"{WORK_DIR}/NotoSansSinhala.ttf"
-FONT_URL  = "https://raw.githubusercontent.com/Super-Chama/Noto-Sans-Sinhala/refs/heads/master/TTF/NotoSansSinhala-Regular.ttf"
+FONT_URL  = "https://raw.githubusercontent.com/Super-Chama/Noto-Sans-Sinhala/refs/heads/master/TTF/NotoSansSinhala-CondensedBold.ttf"
 
 RES_MAP = {2160: (3840, 2160), 1080: (1920, 1080), 720: (1280, 720), 480: (854, 480)}
 CRF_MAP = {2160: 20, 1080: 20, 720: 23, 480: 26}
