@@ -145,10 +145,11 @@ def get_duration(path):
     except: return 0
 
 def build_quality_ladder(src_h):
-    if src_h >= 2160: return [2160, 1080, 720, 480]
-    elif src_h >= 1080: return [1080, 720, 480]
-    elif src_h >= 720: return [720, 480]
-    else: return [480]
+    # Nearest-fit: handles non-standard heights (e.g. 1040p → 1080 ladder)
+    if src_h >= 1920:  return [2160, 1080, 720, 480]
+    elif src_h >= 960: return [1080, 720, 480]
+    elif src_h >= 600: return [720, 480]
+    else:              return [480]
 
 # ─── Font ─────────────────────────────────────────────────────────────────────
 
