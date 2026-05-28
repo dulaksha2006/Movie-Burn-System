@@ -313,7 +313,7 @@ async def tg_upload_all(burned_files, plain_files, thumbnail_path, abyss_link, m
             fname = os.path.basename(file_path)
             file_size = os.path.getsize(file_path)
             file_type = "Sinhala Subtitles" if is_burned else "No Subtitles"
-            label = f"{"\U0001f525" if is_burned else "\U0001f3ac"} {quality}p | {file_type}"
+            label = f"{'🔥' if is_burned else '🎬'} {quality}p | {file_type}"
             tg_log(f"\u2b06\ufe0f Uploading: <b>{label}</b> ({file_size/1e6:.1f} MB)...", edit_key=f"tg_{quality}_{is_burned}")
             caption_parts = [f"<b>{movie_name}</b>", f"\U0001f4fa Quality: <b>{quality}p</b>", f"\U0001f4dd Type: <b>{file_type}</b>", f"\U0001f4e6 Size: {file_size/1e6:.1f} MB"]
             if abyss_link and is_burned: caption_parts.append(f"\u2601\ufe0f Abyss: {abyss_link}")
@@ -383,13 +383,37 @@ def main():
     thumbnail_url = movie.get("backdrop", "")
     file_type     = detect_file_type(video_url)
 
-    # Download video
-    input_video = download_file(video_url, f"{WORK_DIR}/input_video.mp4", "Video")
+    # ── Shared video download (matrix-safe) ──────────────────────────────────
+    # All matrix jobs share the same WORK_DIR. Only the first job to arrive
+    # downloads the video; the others wait for it to appear on disk.
+    input_video   = f"{WORK_DIR}/input_video.mp4"
+    download_lock = f"{WORK_DIR}/.video_downloading"
+
+    if os.path.exists(input_video):
+        size_mb = os.path.getsize(input_video) / 1e6
+        tg_log(f"\u23e9 Video already on disk ({size_mb:.1f} MB) \u2014 skipping download.")
+    elif os.path.exists(download_lock):
+        tg_log("\u23f3 Another job is downloading the video \u2014 waiting...")
+        for _ in range(360):          # wait up to 60 minutes
+            time.sleep(10)
+            if os.path.exists(input_video) and not os.path.exists(download_lock):
+                break
+        if not os.path.exists(input_video):
+            tg_log_error("Timed out waiting for shared video download."); sys.exit(1)
+        tg_log("\u2705 Shared video is ready.")
+    else:
+        # This job is the first \u2014 download and hold the lock
+        open(download_lock, "w").close()
+        try:
+            input_video = download_file(video_url, input_video, "Video")
+        finally:
+            try: os.remove(download_lock)
+            except: pass
 
     # Notify: download accepted
     notify_grand_movie(imdb)
 
-    # Download subtitle & thumbnail
+    # Download subtitle & thumbnail (lightweight \u2014 each job can do this)
     srt_path = download_file(subtitle_url, f"{WORK_DIR}/subtitles.srt", "Subtitle")
     thumbnail_path = None
     if thumbnail_url:
@@ -448,9 +472,15 @@ def main():
     # Notify: upload complete
     notify_uploaded_movie(imdb)
 
-    # Cleanup
-    all_files = [input_video, srt_path] + ([thumbnail_path] if thumbnail_path else []) + list(burned_files.values()) + list(plain_files.values())
-    cleanup(all_files)
+    # Cleanup — shared video is only removed by the last (lowest-quality) job
+    # so other matrix jobs can still read it while encoding.
+    shared_files = ([thumbnail_path] if thumbnail_path else [])
+    encoded_files = list(burned_files.values()) + list(plain_files.values())
+    if not TARGET_QUALITY or TARGET_QUALITY == min(all_qualities):
+        shared_files += [input_video, srt_path]
+    else:
+        shared_files += [srt_path]
+    cleanup(shared_files + encoded_files)
 
     tg_log("\u2705 <b>Pipeline complete.</b>")
     print("\u2705 Pipeline complete.")
