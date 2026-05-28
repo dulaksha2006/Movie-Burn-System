@@ -1,0 +1,6 @@
+pyrogram==2.0.106
+tgcrypto
+opencv-python-headless
+tqdm>=4.66.0
+nest_asyncio>=1.6.0
+requests>=2.31.0
