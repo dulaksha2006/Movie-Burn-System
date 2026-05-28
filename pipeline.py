@@ -111,34 +111,12 @@ def fetch_movie():
     env_sub  = os.environ.get("MOVIE_SUB_LINK", "")
     env_back = os.environ.get("MOVIE_BACKDROP", "")
 
-    # MOVIE_DL_LINK is optional — video already downloaded as artifact in prepare job
-    if env_name and env_imdb and env_sub:
-        tg_log(f"✅ Movie from env vars:\n🎬 <b>{env_name}</b>\n🆔 <code>{env_imdb}</code>\n🎯 Quality: <b>{TARGET_QUALITY}p</b>")
-        return {"name": env_name, "imdb": env_imdb, "dl_link": env_dl, "subtitle_link": env_sub, "backdrop": env_back}
+    if not (env_name and env_imdb and env_sub):
+        tg_log_error("Missing required env vars: MOVIE_NAME, MOVIE_IMDB or MOVIE_SUB_LINK not set.")
+        sys.exit(1)
 
-    tg_log("🔍 Fetching movie from trigger URL...")
-    try:
-        r = requests.get(TRIGGER_URL, timeout=30)
-    except Exception as e:
-        tg_log_error(f"Network error: {e}"); sys.exit(1)
-    if not r.ok:
-        tg_log_error(f"Trigger fetch failed: HTTP {r.status_code} — {r.text[:200]}"); sys.exit(1)
-    try:
-        data = r.json()
-    except Exception as e:
-        tg_log_error(f"Invalid JSON: {e}"); sys.exit(1)
-    movies = data.get("movies", [])
-    if not movies:
-        tg_log("⚠️ No movies available. Exiting."); sys.exit(0)
-
-    # Skip movies with status="granded"
-    pending = [m for m in movies if m.get("status", "").lower() != "granded"]
-    if not pending:
-        tg_log("⚠️ All movies are already granded. Exiting."); sys.exit(0)
-
-    movie = pending[0]
-    tg_log(f"✅ Movie found!\n🎬 <b>{movie['name']}</b>\n🆔 <code>{movie['imdb']}</code>")
-    return movie
+    tg_log(f"✅ Movie from env vars:\n🎬 <b>{env_name}</b>\n🆔 <code>{env_imdb}</code>\n🎯 Quality: <b>{TARGET_QUALITY}p</b>")
+    return {"name": env_name, "imdb": env_imdb, "dl_link": env_dl, "subtitle_link": env_sub, "backdrop": env_back}
 
 # ─── Notify endpoints ─────────────────────────────────────────────────────────
 
