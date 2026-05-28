@@ -6,6 +6,11 @@ Fetches video/subtitle links, burns subtitles, uploads to Abyss.to & Telegram
 
 import os, sys, re, json, time, glob, asyncio, subprocess, urllib.request
 import requests
+try:
+    from requests_toolbelt import MultipartEncoder, MultipartEncoderMonitor
+    HAS_TOOLBELT = True
+except ImportError:
+    HAS_TOOLBELT = False
 import config as _cfg
 
 # ─── Telegram Logger ──────────────────────────────────────────────────────────
@@ -326,6 +331,8 @@ def detect_file_type(video_url):
 def upload_to_abyss(file_path, api_key):
     fname = os.path.basename(file_path)
     file_size = os.path.getsize(file_path)
+    upload_url = f"https://up.abyss.to/{api_key}"
+
     tg_log(
         f"☁️ <b>Abyss.to Upload</b>\n"
         f"📄 {fname}\n"
@@ -333,26 +340,82 @@ def upload_to_abyss(file_path, api_key):
         f"⏳ Status: Uploading...",
         edit_key="abyss"
     )
-    with open(file_path, "rb") as f:
-        resp = requests.post(
-            f"{ABYSS_UPLOAD_URL}/{api_key}",
-            headers={"content-type": "multipart/related"},
-            files={"file": (fname, f, "video/mp4")},
-            timeout=3600
-        )
+
+    start = time.time()
+    last_tg = [0]
+
+    def _do_upload():
+        with open(file_path, "rb") as f:
+            if HAS_TOOLBELT:
+                encoder = MultipartEncoder(
+                    fields={"file": (fname, f, "video/mp4")}
+                )
+
+                def _progress_cb(monitor):
+                    pct = monitor.bytes_read / file_size * 100 if file_size else 0
+                    elapsed = time.time() - start
+                    speed = monitor.bytes_read / elapsed if elapsed > 0 else 0
+                    eta = (file_size - monitor.bytes_read) / speed if speed > 0 else 0
+                    if time.time() - last_tg[0] > 15:
+                        last_tg[0] = time.time()
+                        tg_log(
+                            f"☁️ <b>Abyss.to Upload</b>\n"
+                            f"{make_progress_bar(pct)}\n"
+                            f"📦 {format_size(monitor.bytes_read)} / {format_size(file_size)}\n"
+                            f"⚡ {speed/1e6:.2f} MB/s  |  ⏳ ETA: {format_eta(eta)}",
+                            edit_key="abyss"
+                        )
+
+                monitor = MultipartEncoderMonitor(encoder, _progress_cb)
+                resp = requests.post(
+                    upload_url,
+                    data=monitor,
+                    headers={"Content-Type": monitor.content_type},
+                    timeout=3600
+                )
+            else:
+                # Fallback: standard requests multipart (no progress bar)
+                resp = requests.post(
+                    upload_url,
+                    files={"file": (fname, f, "video/mp4")},
+                    timeout=3600
+                )
+        return resp
+
+    # Retry up to 3 times on transient errors
+    for attempt in range(1, 4):
+        try:
+            resp = _do_upload()
+            break
+        except requests.exceptions.RequestException as e:
+            tg_log(f"⚠️ Abyss upload attempt {attempt}/3 failed: {e}", edit_key="abyss")
+            if attempt == 3:
+                tg_log_error(f"Abyss upload failed after 3 attempts: {e}")
+                return None
+            time.sleep(5 * attempt)
+
     if resp.status_code == 200:
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError:
+            tg_log_error(f"Abyss returned non-JSON 200: {resp.text[:500]}")
+            return None
         slug = data.get("slug") or data.get("id") or str(data)
         link = f"https://abyss.to/{slug}"
+        elapsed = time.time() - start
         tg_log(
             f"✅ <b>Abyss.to Upload Done!</b>\n"
             f"📄 {fname}\n"
+            f"📦 {format_size(file_size)}  |  ⏱ {elapsed:.0f}s\n"
             f"🔗 {link}",
             edit_key="abyss"
         )
         return link
     else:
-        tg_log_error(f"Abyss upload failed: {resp.status_code} {resp.text[:500]}")
+        tg_log_error(
+            f"Abyss upload failed: HTTP {resp.status_code}\n"
+            f"Response: {resp.text[:500]}"
+        )
         return None
 
 # ─── Telegram upload ──────────────────────────────────────────────────────────
