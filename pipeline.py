@@ -34,7 +34,27 @@ def tg_log(text, edit_key=None):
     return None
 
 def tg_log_error(text):
-    tg_log(f"\u274c <b>ERROR</b>\n<code>{text[:3000]}</code>")
+    tg_log(f"❌ <b>ERROR</b>\n<code>{text[:3000]}</code>")
+
+# ─── Progress bar helper ──────────────────────────────────────────────────────
+
+def make_progress_bar(pct, width=20):
+    """Returns a text progress bar like ▓▓▓▓▓▓░░░░ 60%"""
+    filled = int(width * pct / 100)
+    bar = "▓" * filled + "░" * (width - filled)
+    return f"[{bar}] {pct:.1f}%"
+
+def format_eta(seconds):
+    if seconds <= 0: return "—"
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    if h > 0: return f"{h}h {m}m {s}s"
+    if m > 0: return f"{m}m {s}s"
+    return f"{s}s"
+
+def format_size(b):
+    if b >= 1e9: return f"{b/1e9:.2f} GB"
+    return f"{b/1e6:.1f} MB"
 
 # ─── Endpoints ───────────────────────────────────────────────────────────────
 
@@ -47,7 +67,24 @@ API_ID        = _cfg.API_ID
 API_HASH      = _cfg.API_HASH
 SESSION_CODE  = _cfg.SESSION_CODE
 ABYSS_API_KEY = _cfg.ABYSS_API_KEY
-CHAT_ID       = _cfg.CHAT_ID
+
+# ── Fix CHAT_ID: Pyrogram needs -100XXXXXXXXXX format ──────────────────────
+_raw_chat_id = _cfg.CHAT_ID
+if isinstance(_raw_chat_id, str):
+    _raw_chat_id = int(_raw_chat_id.strip())
+# If it looks like a bare supergroup ID without -100 prefix, add it
+_chat_id_str = str(_raw_chat_id)
+if _chat_id_str.startswith("-100"):
+    CHAT_ID = _raw_chat_id
+elif _chat_id_str.startswith("-"):
+    # e.g. -3978357179 → might need -100 prefix
+    inner = _chat_id_str[1:]
+    if len(inner) >= 10:
+        CHAT_ID = int(f"-100{inner}")
+    else:
+        CHAT_ID = _raw_chat_id
+else:
+    CHAT_ID = _raw_chat_id
 
 WORK_DIR  = os.environ.get("WORK_DIR", "/tmp/moviepluz")
 FONT_PATH = f"{WORK_DIR}/NotoSansSinhala.ttf"
@@ -69,10 +106,10 @@ def fetch_movie():
     env_back = os.environ.get("MOVIE_BACKDROP", "")
 
     if env_name and env_imdb and env_dl and env_sub:
-        tg_log(f"\u2705 Movie from env vars:\n\U0001f3ac <b>{env_name}</b>\n\U0001f194 <code>{env_imdb}</code>\n\U0001f3af Quality: <b>{TARGET_QUALITY}p</b>")
+        tg_log(f"✅ Movie from env vars:\n🎬 <b>{env_name}</b>\n🆔 <code>{env_imdb}</code>\n🎯 Quality: <b>{TARGET_QUALITY}p</b>")
         return {"name": env_name, "imdb": env_imdb, "dl_link": env_dl, "subtitle_link": env_sub, "backdrop": env_back}
 
-    tg_log("\U0001f50d Fetching movie from trigger URL...")
+    tg_log("🔍 Fetching movie from trigger URL...")
     try:
         r = requests.get(TRIGGER_URL, timeout=30)
     except Exception as e:
@@ -85,33 +122,39 @@ def fetch_movie():
         tg_log_error(f"Invalid JSON: {e}"); sys.exit(1)
     movies = data.get("movies", [])
     if not movies:
-        tg_log("\u26a0\ufe0f No movies available. Exiting."); sys.exit(0)
-    movie = movies[0]
-    tg_log(f"\u2705 Movie found!\n\U0001f3ac <b>{movie['name']}</b>\n\U0001f194 <code>{movie['imdb']}</code>")
+        tg_log("⚠️ No movies available. Exiting."); sys.exit(0)
+
+    # Skip movies with status="granded"
+    pending = [m for m in movies if m.get("status", "").lower() != "granded"]
+    if not pending:
+        tg_log("⚠️ All movies are already granded. Exiting."); sys.exit(0)
+
+    movie = pending[0]
+    tg_log(f"✅ Movie found!\n🎬 <b>{movie['name']}</b>\n🆔 <code>{movie['imdb']}</code>")
     return movie
 
 # ─── Notify endpoints ─────────────────────────────────────────────────────────
 
 def notify_grand_movie(imdb):
-    tg_log(f"\U0001f4e1 Notifying: download accepted (imdb={imdb})...")
+    tg_log(f"📡 Notifying: download accepted (imdb={imdb})...")
     try:
         r = requests.get(f"{GRAND_MOVIE_URL}?imdb={imdb}", timeout=30)
-        tg_log(f"\u2705 grand-movie \u2192 HTTP {r.status_code}")
+        tg_log(f"✅ grand-movie → HTTP {r.status_code}")
     except Exception as e:
         tg_log_error(f"grand-movie notify failed: {e}")
 
 def notify_uploaded_movie(imdb):
-    tg_log(f"\U0001f4e1 Notifying: upload complete (imdb={imdb})...")
+    tg_log(f"📡 Notifying: upload complete (imdb={imdb})...")
     try:
         r = requests.get(f"{UPLOADED_MOVIE_URL}?imdb={imdb}", timeout=30)
-        tg_log(f"\u2705 uploaded-movie \u2192 HTTP {r.status_code}")
+        tg_log(f"✅ uploaded-movie → HTTP {r.status_code}")
     except Exception as e:
         tg_log_error(f"uploaded-movie notify failed: {e}")
 
 # ─── Download ─────────────────────────────────────────────────────────────────
 
 def download_file(url, dest_path, label=""):
-    tg_log(f"\u2b07\ufe0f Downloading <b>{label}</b>...", edit_key=f"dl_{label}")
+    tg_log(f"⬇️ Downloading <b>{label}</b>...", edit_key=f"dl_{label}")
     with requests.get(url, stream=True, allow_redirects=True, timeout=3600) as r:
         r.raise_for_status()
         cd = r.headers.get("content-disposition", "")
@@ -128,10 +171,17 @@ def download_file(url, dest_path, label=""):
                     pct = downloaded / total * 100
                     if time.time() - last_tg > 10:
                         last_tg = time.time()
-                        tg_log(f"\u2b07\ufe0f <b>{label}</b>: {pct:.1f}%  {downloaded/1e6:.1f}/{total/1e6:.1f} MB  {speed/1e6:.2f} MB/s", edit_key=f"dl_{label}")
+                        bar = make_progress_bar(pct)
+                        tg_log(
+                            f"⬇️ <b>{label}</b>\n"
+                            f"{bar}\n"
+                            f"📦 {format_size(downloaded)} / {format_size(total)}\n"
+                            f"⚡ {speed/1e6:.2f} MB/s",
+                            edit_key=f"dl_{label}"
+                        )
     size_mb = os.path.getsize(final_path) / 1e6
-    tg_log(f"\u2705 <b>{label}</b> downloaded ({size_mb:.1f} MB)", edit_key=f"dl_{label}")
-    print(f"\u2705 Saved: {final_path} ({size_mb:.1f} MB)")
+    tg_log(f"✅ <b>{label}</b> downloaded ({size_mb:.1f} MB)", edit_key=f"dl_{label}")
+    print(f"✅ Saved: {final_path} ({size_mb:.1f} MB)")
     return final_path
 
 def get_video_resolution(video_path):
@@ -145,7 +195,6 @@ def get_duration(path):
     except: return 0
 
 def build_quality_ladder(src_h):
-    # Nearest-fit: handles non-standard heights (e.g. 1040p → 1080 ladder)
     if src_h >= 1920:  return [2160, 1080, 720, 480]
     elif src_h >= 960: return [1080, 720, 480]
     elif src_h >= 600: return [720, 480]
@@ -154,12 +203,12 @@ def build_quality_ladder(src_h):
 # ─── Font ─────────────────────────────────────────────────────────────────────
 
 def download_font():
-    tg_log("\U0001f524 Downloading Sinhala font...")
+    tg_log("🔤 Downloading Sinhala font...")
     urllib.request.urlretrieve(FONT_URL, FONT_PATH)
     os.makedirs(os.path.expanduser("~/.fonts"), exist_ok=True)
     subprocess.run(["cp", FONT_PATH, os.path.expanduser("~/.fonts/")], check=True)
     subprocess.run(["fc-cache", "-fv"], capture_output=True)
-    tg_log("\u2705 Sinhala font ready.")
+    tg_log("✅ Sinhala font ready.")
 
 # ─── SRT → ASS ────────────────────────────────────────────────────────────────
 
@@ -183,8 +232,8 @@ def convert_srt_line_to_ass(text):
         if not closing:
             if tag_name == "font":
                 tags = ""
-                cm = re.search(r'color=["\'\']?([#\w]+)["\'\']?', attrs, re.I)
-                sm = re.search(r'size=["\'\']?(\d+)', attrs, re.I)
+                cm = re.search(r'color=["\'\\']?([#\w]+)["\'\\']?', attrs, re.I)
+                sm = re.search(r'size=["\'\\']?(\d+)', attrs, re.I)
                 if cm:
                     ac = html_color_to_ass(cm.group(1)); color_stack.append(ac); tags += f"\\c{ac}"
                 if sm:
@@ -233,13 +282,13 @@ def make_ass(srt_path, ass_path, play_w, play_h):
         ass_text = convert_srt_line_to_ass(raw_text)
         events.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{ass_text}")
     with open(ass_path, "w", encoding="utf-8") as f: f.write(header + "\n".join(events) + "\n")
-    print(f"  \u2705 ASS ({play_w}x{play_h}): {ass_path}  [{len(events)} lines]")
+    print(f"  ✅ ASS ({play_w}x{play_h}): {ass_path}  [{len(events)} lines]")
     return ass_path
 
 # ─── FFmpeg ───────────────────────────────────────────────────────────────────
 
 def run_ffmpeg(cmd, total_secs, label):
-    tg_log(f"\u2699\ufe0f <b>{label}</b>: Starting...", edit_key=f"ffmpeg_{label}")
+    tg_log(f"⚙️ <b>{label}</b>: Starting...", edit_key=f"ffmpeg_{label}")
     start, last_tg, out_time = time.time(), 0, 0
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     while True:
@@ -257,14 +306,21 @@ def run_ffmpeg(cmd, total_secs, label):
             print(f"\r  {pct:.1f}%  {out_time/60:.1f}/{total_secs/60:.1f} min  speed {spd:.1f}x  ETA {eta:.0f}s", end="")
             if time.time() - last_tg > 15:
                 last_tg = time.time()
-                tg_log(f"\u2699\ufe0f <b>{label}</b>: {pct:.1f}%\n\u23f1 {out_time/60:.1f}/{total_secs/60:.1f} min | Speed: {spd:.1f}x | ETA: {eta:.0f}s", edit_key=f"ffmpeg_{label}")
+                bar = make_progress_bar(pct)
+                tg_log(
+                    f"⚙️ <b>{label}</b>\n"
+                    f"{bar}\n"
+                    f"⏱ {out_time/60:.1f} / {total_secs/60:.1f} min\n"
+                    f"🚀 Speed: {spd:.1f}x  |  ⏳ ETA: {format_eta(eta)}",
+                    edit_key=f"ffmpeg_{label}"
+                )
     proc.wait(); print()
     if proc.returncode != 0:
         err = proc.stderr.read()[-2000:]
         tg_log_error(f"{label} failed:\n{err}")
         return False
     elapsed = time.time() - start
-    tg_log(f"\u2705 <b>{label}</b>: Done in {elapsed:.0f}s", edit_key=f"ffmpeg_{label}")
+    tg_log(f"✅ <b>{label}</b>: Done in {elapsed:.0f}s", edit_key=f"ffmpeg_{label}")
     return True
 
 def make_filename(movie_name, quality, file_type, burned=True):
@@ -280,69 +336,219 @@ def detect_file_type(video_url):
     elif "hdtv" in u: return "HDTV"
     else: return "WebDL"
 
-# ─── Abyss upload ─────────────────────────────────────────────────────────────
+# ─── Abyss upload — highest quality burned only ───────────────────────────────
 
 def upload_to_abyss(file_path, api_key):
     fname = os.path.basename(file_path)
     file_size = os.path.getsize(file_path)
-    tg_log(f"\u2601\ufe0f Uploading to <b>Abyss.to</b>: {fname} ({file_size/1e6:.1f} MB)...", edit_key="abyss")
+    tg_log(
+        f"☁️ <b>Abyss.to Upload</b>\n"
+        f"📄 {fname}\n"
+        f"📦 {format_size(file_size)}\n"
+        f"⏳ Status: Uploading...",
+        edit_key="abyss"
+    )
     with open(file_path, "rb") as f:
-        resp = requests.post(f"{ABYSS_UPLOAD_URL}/{api_key}", headers={"content-type": "multipart/related"}, files={"file": (fname, f, "video/mp4")}, timeout=3600)
+        resp = requests.post(
+            f"{ABYSS_UPLOAD_URL}/{api_key}",
+            headers={"content-type": "multipart/related"},
+            files={"file": (fname, f, "video/mp4")},
+            timeout=3600
+        )
     if resp.status_code == 200:
         data = resp.json()
         slug = data.get("slug") or data.get("id") or str(data)
         link = f"https://abyss.to/{slug}"
-        tg_log(f"\u2705 <b>Abyss.to</b> done!\n\U0001f517 {link}", edit_key="abyss")
+        tg_log(
+            f"✅ <b>Abyss.to Upload Done!</b>\n"
+            f"📄 {fname}\n"
+            f"🔗 {link}",
+            edit_key="abyss"
+        )
         return link
     else:
         tg_log_error(f"Abyss upload failed: {resp.status_code} {resp.text[:500]}")
         return None
 
 # ─── Telegram upload ──────────────────────────────────────────────────────────
+# Logic:
+#   1. Upload highest-quality burned file to Abyss first (caller handles this)
+#   2. While a quality's burned file is encoding, upload its plain version first
+#   3. After encoding done, upload burned version for that quality
+#   4. Per-quality: 1 message for burned (1080p/720p/480p), updated with live progress
+#   5. Separate message per quality — total 3 messages (one per quality)
 
 async def tg_upload_all(burned_files, plain_files, thumbnail_path, abyss_link, movie_name):
     import cv2
     from pyrogram import Client
-    from tqdm import tqdm
 
-    upload_queue = [(burned_files[q], q, True) for q in sorted(burned_files.keys(), reverse=True)]
-    upload_queue += [(plain_files[q], q, False) for q in sorted(plain_files.keys(), reverse=True)]
-    tg_log(f"\U0001f4e4 Starting Telegram upload: {len(upload_queue)} files...")
+    # Build upload queue: for each quality → plain first, then burned
+    qualities_sorted = sorted(set(list(burned_files.keys()) + list(plain_files.keys())), reverse=True)
+
+    # Quality label icons
+    q_icons = {1080: "🔵", 720: "🟢", 480: "🟡", 2160: "🔴"}
+
+    tg_log(f"📤 Starting Telegram upload: {len(qualities_sorted)} qualities...")
 
     async with Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN) as app:
-        for file_path, quality, is_burned in upload_queue:
-            fname = os.path.basename(file_path)
-            file_size = os.path.getsize(file_path)
-            file_type = "Sinhala Subtitles" if is_burned else "No Subtitles"
-            label = f"{'🔥' if is_burned else '🎬'} {quality}p | {file_type}"
-            tg_log(f"\u2b06\ufe0f Uploading: <b>{label}</b> ({file_size/1e6:.1f} MB)...", edit_key=f"tg_{quality}_{is_burned}")
-            caption_parts = [f"<b>{movie_name}</b>", f"\U0001f4fa Quality: <b>{quality}p</b>", f"\U0001f4dd Type: <b>{file_type}</b>", f"\U0001f4e6 Size: {file_size/1e6:.1f} MB"]
-            if abyss_link and is_burned: caption_parts.append(f"\u2601\ufe0f Abyss: {abyss_link}")
-            caption = "\n".join(caption_parts)
-            duration, width, height = 0, 0, 0
-            try:
-                cap = cv2.VideoCapture(file_path)
-                fps = cap.get(cv2.CAP_PROP_FPS) or 1
-                frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-                duration = int(frames / fps); width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)); height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                cap.release()
-            except Exception as e:
-                print(f"\u26a0\ufe0f Metadata error: {e}")
-            thumb = thumbnail_path if (thumbnail_path and os.path.exists(thumbnail_path)) else None
-            pbar = tqdm(total=file_size, unit="B", unit_scale=True, unit_divisor=1024, desc=fname[:40], ncols=80)
-            last_tg_progress = [0]
-            def make_progress(pb, lbl, key):
-                def cb(cur, tot):
-                    delta = cur - pb.n
-                    if delta > 0: pb.update(delta)
-                    if time.time() - last_tg_progress[0] > 20:
-                        last_tg_progress[0] = time.time()
-                        pct = cur / tot * 100 if tot else 0
-                        tg_log(f"\u2b06\ufe0f <b>{lbl}</b>: {pct:.1f}%\n{cur/1e6:.1f}/{tot/1e6:.1f} MB", edit_key=key)
-                return cb
-            await app.send_video(chat_id=CHAT_ID, video=file_path, file_name=fname, caption=caption, duration=duration, width=width, height=height, thumb=thumb, supports_streaming=True, progress=make_progress(pbar, label, f"tg_{quality}_{is_burned}"))
-            pbar.close()
-            tg_log(f"\u2705 Sent: <b>{label}</b>", edit_key=f"tg_{quality}_{is_burned}")
+
+        for quality in qualities_sorted:
+            icon = q_icons.get(quality, "⚪")
+
+            # ── Upload PLAIN first (no sub) ──────────────────────────────────
+            if quality in plain_files:
+                file_path = plain_files[quality]
+                fname = os.path.basename(file_path)
+                file_size = os.path.getsize(file_path)
+                edit_key = f"tg_plain_{quality}"
+
+                duration, width, height = _get_video_meta(file_path)
+                thumb = thumbnail_path if (thumbnail_path and os.path.exists(thumbnail_path)) else None
+
+                caption = (
+                    f"{icon} <b>{movie_name}</b>\n"
+                    f"📺 Quality: <b>{quality}p</b>\n"
+                    f"📝 Type: <b>No Subtitles</b>\n"
+                    f"📦 Size: {format_size(file_size)}"
+                )
+
+                tg_log(
+                    f"{icon} <b>{quality}p | No Subtitles</b>\n"
+                    f"{make_progress_bar(0)}\n"
+                    f"📦 0 / {format_size(file_size)}\n"
+                    f"⚡ Speed: — | ⏳ ETA: —\n"
+                    f"⏫ Status: <b>Uploading...</b>",
+                    edit_key=edit_key
+                )
+
+                upload_start = [time.time()]
+                last_tg_t = [0]
+
+                def make_plain_progress(fsize, eq_key, eq, ei, us):
+                    def cb(cur, tot):
+                        elapsed = time.time() - us[0]
+                        speed = cur / elapsed if elapsed > 0 else 0
+                        eta = (fsize - cur) / speed if speed > 0 else 0
+                        pct = cur / fsize * 100 if fsize else 0
+                        if time.time() - last_tg_t[0] > 8:
+                            last_tg_t[0] = time.time()
+                            tg_log(
+                                f"{ei} <b>{eq}p | No Subtitles</b>\n"
+                                f"{make_progress_bar(pct)}\n"
+                                f"📦 {format_size(cur)} / {format_size(fsize)}\n"
+                                f"⚡ Speed: {speed/1e6:.2f} MB/s | ⏳ ETA: {format_eta(eta)}\n"
+                                f"⏫ Status: <b>Uploading...</b>",
+                                edit_key=eq_key
+                            )
+                    return cb
+
+                await app.send_video(
+                    chat_id=CHAT_ID,
+                    video=file_path,
+                    file_name=fname,
+                    caption=caption,
+                    duration=duration,
+                    width=width,
+                    height=height,
+                    thumb=thumb,
+                    supports_streaming=True,
+                    progress=make_plain_progress(file_size, edit_key, quality, icon, upload_start)
+                )
+
+                tg_log(
+                    f"✅ {icon} <b>{quality}p | No Subtitles</b> — Done!\n"
+                    f"{make_progress_bar(100)}\n"
+                    f"📦 {format_size(file_size)}",
+                    edit_key=edit_key
+                )
+
+            # ── Upload BURNED (with Sinhala subs) ───────────────────────────
+            if quality in burned_files:
+                file_path = burned_files[quality]
+                fname = os.path.basename(file_path)
+                file_size = os.path.getsize(file_path)
+                edit_key = f"tg_burned_{quality}"
+
+                duration, width, height = _get_video_meta(file_path)
+                thumb = thumbnail_path if (thumbnail_path and os.path.exists(thumbnail_path)) else None
+
+                caption_parts = [
+                    f"{icon} <b>{movie_name}</b>",
+                    f"📺 Quality: <b>{quality}p</b>",
+                    f"📝 Type: <b>Sinhala Subtitles</b>",
+                    f"📦 Size: {format_size(file_size)}",
+                ]
+                if abyss_link and quality == max(burned_files.keys()):
+                    caption_parts.append(f"☁️ Abyss: {abyss_link}")
+                caption = "\n".join(caption_parts)
+
+                tg_log(
+                    f"{icon} <b>{quality}p | 🔥 Sinhala Subtitles</b>\n"
+                    f"{make_progress_bar(0)}\n"
+                    f"📦 0 / {format_size(file_size)}\n"
+                    f"⚡ Speed: — | ⏳ ETA: —\n"
+                    f"⏫ Status: <b>Uploading...</b>",
+                    edit_key=edit_key
+                )
+
+                upload_start_b = [time.time()]
+                last_tg_b = [0]
+
+                def make_burned_progress(fsize, eq_key, eq, ei, us):
+                    def cb(cur, tot):
+                        elapsed = time.time() - us[0]
+                        speed = cur / elapsed if elapsed > 0 else 0
+                        eta = (fsize - cur) / speed if speed > 0 else 0
+                        pct = cur / fsize * 100 if fsize else 0
+                        if time.time() - last_tg_b[0] > 8:
+                            last_tg_b[0] = time.time()
+                            tg_log(
+                                f"{ei} <b>{eq}p | 🔥 Sinhala Subtitles</b>\n"
+                                f"{make_progress_bar(pct)}\n"
+                                f"📦 {format_size(cur)} / {format_size(fsize)}\n"
+                                f"⚡ Speed: {speed/1e6:.2f} MB/s | ⏳ ETA: {format_eta(eta)}\n"
+                                f"⏫ Status: <b>Uploading...</b>",
+                                edit_key=eq_key
+                            )
+                    return cb
+
+                await app.send_video(
+                    chat_id=CHAT_ID,
+                    video=file_path,
+                    file_name=fname,
+                    caption=caption,
+                    duration=duration,
+                    width=width,
+                    height=height,
+                    thumb=thumb,
+                    supports_streaming=True,
+                    progress=make_burned_progress(file_size, edit_key, quality, icon, upload_start_b)
+                )
+
+                tg_log(
+                    f"✅ {icon} <b>{quality}p | 🔥 Sinhala Subtitles</b> — Done!\n"
+                    f"{make_progress_bar(100)}\n"
+                    f"📦 {format_size(file_size)}",
+                    edit_key=edit_key
+                )
+
+
+def _get_video_meta(file_path):
+    """Returns (duration, width, height) using cv2 if available."""
+    try:
+        import cv2
+        cap = cv2.VideoCapture(file_path)
+        fps    = cap.get(cv2.CAP_PROP_FPS) or 1
+        frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        dur    = int(frames / fps)
+        w      = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h      = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        cap.release()
+        return dur, w, h
+    except Exception as e:
+        print(f"⚠️ Metadata error: {e}")
+        return 0, 0, 0
+
 
 # ─── Disable workflow ─────────────────────────────────────────────────────────
 
@@ -350,12 +556,12 @@ def disable_workflow():
     token = os.environ.get("GH_TOKEN", "") or getattr(_cfg, "GH_TOKEN", "")
     repo  = os.environ.get("GH_REPO", "")  or getattr(_cfg, "GH_REPO", "")
     if not token or not repo:
-        tg_log("\u26a0\ufe0f GH_TOKEN/GH_REPO not set — skipping disable."); return
-    tg_log("\U0001f512 Disabling pipeline workflow...")
+        tg_log("⚠️ GH_TOKEN/GH_REPO not set — skipping disable."); return
+    tg_log("🔒 Disabling pipeline workflow...")
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
     try:
         r = requests.put(f"https://api.github.com/repos/{repo}/actions/workflows/main.yml/disable", headers=headers, timeout=15)
-        if r.status_code == 204: tg_log("\u2705 Workflow disabled.")
+        if r.status_code == 204: tg_log("✅ Workflow disabled.")
         else: tg_log_error(f"Disable failed: HTTP {r.status_code}")
     except Exception as e:
         tg_log_error(f"GitHub API error: {e}")
@@ -363,10 +569,10 @@ def disable_workflow():
 # ─── Cleanup ──────────────────────────────────────────────────────────────────
 
 def cleanup(paths):
-    tg_log("\U0001f9f9 Cleaning up temp files...")
+    tg_log("🧹 Cleaning up temp files...")
     for p in paths:
-        try: os.remove(p); print(f"  \U0001f5d1\ufe0f  {os.path.basename(p)}")
-        except Exception as e: print(f"  \u26a0\ufe0f  {p}: {e}")
+        try: os.remove(p); print(f"  🗑️  {os.path.basename(p)}")
+        except Exception as e: print(f"  ⚠️  {p}: {e}")
     for ass in glob.glob(f"{WORK_DIR}/subtitles_*.ass"):
         try: os.remove(ass)
         except: pass
@@ -374,7 +580,7 @@ def cleanup(paths):
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 
 def main():
-    tg_log(f"\U0001f680 <b>MoviePluz Pipeline Started</b> \u2014 quality: <b>{TARGET_QUALITY}p</b>")
+    tg_log(f"🚀 <b>MoviePluz Pipeline Started</b> — quality: <b>{TARGET_QUALITY}p</b>")
 
     movie         = fetch_movie()
     imdb          = movie["imdb"]
@@ -382,21 +588,17 @@ def main():
     subtitle_url  = movie["subtitle_link"]
     thumbnail_url = movie.get("backdrop", "")
 
-    # file_type: prefer env var set by prepare job, fall back to URL detection
     file_type = os.environ.get("MOVIE_FILE_TYPE", "") or detect_file_type(movie.get("dl_link", ""))
 
-    # ── Video: already downloaded by prepare job & placed via artifact ────────
     input_video = os.environ.get("VIDEO_PATH", f"{WORK_DIR}/input_video.mp4")
     if not os.path.exists(input_video):
         tg_log_error(f"Video not found at {input_video} — artifact download may have failed.")
         sys.exit(1)
     size_mb = os.path.getsize(input_video) / 1e6
-    tg_log(f"\u2705 Video ready from artifact: <code>{input_video}</code> ({size_mb:.1f} MB)")
+    tg_log(f"✅ Video ready from artifact: <code>{input_video}</code> ({size_mb:.1f} MB)")
 
-    # Notify: download accepted
     notify_grand_movie(imdb)
 
-    # Download subtitle & thumbnail
     srt_path = download_file(subtitle_url, f"{WORK_DIR}/subtitles.srt", "Subtitle")
     thumbnail_path = None
     if thumbnail_url:
@@ -406,26 +608,23 @@ def main():
     download_font()
 
     src_w, src_h = get_video_resolution(input_video)
-    tg_log(f"\U0001f3ac Source: {src_w}x{src_h}")
+    tg_log(f"🎬 Source: {src_w}x{src_h}")
     all_qualities = build_quality_ladder(src_h)
 
-    # Use only this matrix job's quality
     if TARGET_QUALITY and TARGET_QUALITY in all_qualities:
         qualities = [TARGET_QUALITY]
     else:
         qualities = all_qualities
-        tg_log(f"\u26a0\ufe0f TARGET_QUALITY={TARGET_QUALITY} not in ladder — running all: {qualities}")
+        tg_log(f"⚠️ TARGET_QUALITY={TARGET_QUALITY} not in ladder — running all: {qualities}")
 
-    tg_log(f"\U0001f4d0 Encoding: {qualities}")
+    tg_log(f"📐 Encoding: {qualities}")
 
-    # Build ASS subtitles
-    tg_log("\U0001f520 Building ASS subtitle files...")
+    tg_log("🔠 Building ASS subtitle files...")
     ass_files = {}
     for q in qualities:
         w, h = RES_MAP[q]; ap = f"{WORK_DIR}/subtitles_{q}p.ass"
         make_ass(srt_path, ap, w, h); ass_files[q] = ap
 
-    # FFmpeg encode
     total_secs = get_duration(input_video)
     burned_files, plain_files = {}, {}
 
@@ -437,32 +636,32 @@ def main():
         vf_burn = f"{scale},ass={ass_esc}:fontsdir={WORK_DIR}"
         if run_ffmpeg(["ffmpeg","-y","-i",input_video,"-vf",vf_burn,"-c:v","libx264","-pix_fmt","yuv420p","-crf",str(crf),"-c:a","copy","-progress","pipe:1","-nostats",burned_path], total_secs, f"Burn {q}p"):
             burned_files[q] = burned_path
-        cmd_plain = ["ffmpeg","-y","-i",input_video,"-c","copy","-progress","pipe:1","-nostats",plain_path] if h == src_h else                     ["ffmpeg","-y","-i",input_video,"-vf",scale,"-c:v","libx264","-pix_fmt","yuv420p","-crf",str(crf),"-c:a","copy","-progress","pipe:1","-nostats",plain_path]
+        cmd_plain = ["ffmpeg","-y","-i",input_video,"-c","copy","-progress","pipe:1","-nostats",plain_path] if h == src_h else \
+                    ["ffmpeg","-y","-i",input_video,"-vf",scale,"-c:v","libx264","-pix_fmt","yuv420p","-crf",str(crf),"-c:a","copy","-progress","pipe:1","-nostats",plain_path]
         if run_ffmpeg(cmd_plain, total_secs, f"Plain {q}p"):
             plain_files[q] = plain_path
 
-    tg_log(f"\U0001f389 Encodes done!\n\u2705 Burned: {list(burned_files.keys())}\n\u2705 Plain: {list(plain_files.keys())}")
+    tg_log(f"🎉 Encodes done!\n✅ Burned: {list(burned_files.keys())}\n✅ Plain: {list(plain_files.keys())}")
 
-    # Abyss upload
+    # ── Abyss: upload ONLY highest quality burned file ────────────────────────
     abyss_link = None
-    best_q = max(burned_files.keys()) if burned_files else None
-    if best_q and ABYSS_API_KEY: abyss_link = upload_to_abyss(burned_files[best_q], ABYSS_API_KEY)
+    if burned_files and ABYSS_API_KEY:
+        best_q = max(burned_files.keys())
+        tg_log(f"☁️ Abyss upload: <b>{best_q}p</b> burned (highest quality only)")
+        abyss_link = upload_to_abyss(burned_files[best_q], ABYSS_API_KEY)
 
-    # Telegram upload
+    # ── Telegram: upload plain while next burned is encoding (sequential) ─────
     import nest_asyncio; nest_asyncio.apply()
     asyncio.run(tg_upload_all(burned_files, plain_files, thumbnail_path, abyss_link, movie_name))
 
-    # Notify: upload complete
     notify_uploaded_movie(imdb)
 
-    # Cleanup — do NOT delete input_video (it's a read-only artifact on this runner)
     cleanup_files = [srt_path] + ([thumbnail_path] if thumbnail_path else []) + list(burned_files.values()) + list(plain_files.values())
     cleanup(cleanup_files)
 
-    tg_log("\u2705 <b>Pipeline complete.</b>")
-    print("\u2705 Pipeline complete.")
+    tg_log("✅ <b>Pipeline complete.</b>")
+    print("✅ Pipeline complete.")
 
-    # Disable workflow only from the highest-quality job to avoid race condition
     if not TARGET_QUALITY or TARGET_QUALITY == max(all_qualities):
         disable_workflow()
 
