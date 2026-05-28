@@ -597,6 +597,10 @@ def main():
     size_mb = os.path.getsize(input_video) / 1e6
     tg_log(f"✅ Video ready from artifact: <code>{input_video}</code> ({size_mb:.1f} MB)")
 
+    src_w, src_h = get_video_resolution(input_video)
+    tg_log(f"🎬 Source: {src_w}x{src_h}")
+    all_qualities = build_quality_ladder(src_h)
+
     # notify_grand_movie only from highest quality job to avoid granded conflict
     if not TARGET_QUALITY or TARGET_QUALITY == max(all_qualities):
         notify_grand_movie(imdb)
@@ -608,10 +612,6 @@ def main():
         except Exception as e: tg_log_error(f"Thumbnail download failed (non-fatal): {e}")
 
     download_font()
-
-    src_w, src_h = get_video_resolution(input_video)
-    tg_log(f"🎬 Source: {src_w}x{src_h}")
-    all_qualities = build_quality_ladder(src_h)
 
     if TARGET_QUALITY and TARGET_QUALITY in all_qualities:
         qualities = [TARGET_QUALITY]
