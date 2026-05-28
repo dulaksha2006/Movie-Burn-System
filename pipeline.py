@@ -111,7 +111,8 @@ def fetch_movie():
     env_sub  = os.environ.get("MOVIE_SUB_LINK", "")
     env_back = os.environ.get("MOVIE_BACKDROP", "")
 
-    if env_name and env_imdb and env_dl and env_sub:
+    # MOVIE_DL_LINK is optional — video already downloaded as artifact in prepare job
+    if env_name and env_imdb and env_sub:
         tg_log(f"✅ Movie from env vars:\n🎬 <b>{env_name}</b>\n🆔 <code>{env_imdb}</code>\n🎯 Quality: <b>{TARGET_QUALITY}p</b>")
         return {"name": env_name, "imdb": env_imdb, "dl_link": env_dl, "subtitle_link": env_sub, "backdrop": env_back}
 
