@@ -4,21 +4,27 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ── Step 1: Fetch movie details & determine quality ladder ─────────────────
+  # ── Step 1: Fetch movie details, download video once, upload as artifact ──────
   prepare:
-    name: 🎬 Prepare — Fetch Movie & Build Matrix
+    name: 🎬 Prepare — Fetch Movie & Download Video
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 120
     outputs:
-      matrix: ${{ steps.build-matrix.outputs.matrix }}
-      movie_name: ${{ steps.build-matrix.outputs.movie_name }}
-      imdb: ${{ steps.build-matrix.outputs.imdb }}
-      dl_link: ${{ steps.build-matrix.outputs.dl_link }}
+      matrix:        ${{ steps.build-matrix.outputs.matrix }}
+      movie_name:    ${{ steps.build-matrix.outputs.movie_name }}
+      imdb:          ${{ steps.build-matrix.outputs.imdb }}
+      video_filename: ${{ steps.build-matrix.outputs.video_filename }}
       subtitle_link: ${{ steps.build-matrix.outputs.subtitle_link }}
-      backdrop: ${{ steps.build-matrix.outputs.backdrop }}
+      backdrop:      ${{ steps.build-matrix.outputs.backdrop }}
+      file_type:     ${{ steps.build-matrix.outputs.file_type }}
 
     steps:
-      - name: Fetch movie from trigger URL
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg -qq
+
+      - name: Fetch movie & build matrix
         id: build-matrix
         run: |
           RESPONSE=$(curl -sf "https://trigger-bot.s-dulaksha-com.workers.dev/get-movie")
@@ -30,33 +36,62 @@ jobs:
           SUB_LINK=$(echo "$RESPONSE"   | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['movies'][0]['subtitle_link'])")
           BACKDROP=$(echo "$RESPONSE"   | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['movies'][0].get('backdrop',''))")
 
-          # Probe source resolution via HEAD + ffprobe
-          TMP_PROBE=$(mktemp /tmp/probe_XXXXXX.mp4)
-          curl -sL --range 0-5242880 -o "$TMP_PROBE" "$DL_LINK" || true
-          SRC_H=$(ffprobe -v error -select_streams v:0 \
-            -show_entries stream=height -of default=noprint_wrappers=1:nokey=1 \
-            "$TMP_PROBE" 2>/dev/null || echo "1080")
-          rm -f "$TMP_PROBE"
-          echo "Detected source height: ${SRC_H}p"
+          # Detect file type from URL
+          DL_LOWER=$(echo "$DL_LINK" | tr '[:upper:]' '[:lower:]')
+          if echo "$DL_LOWER" | grep -qE "bluray|blu-ray"; then FILE_TYPE="BluRay"
+          elif echo "$DL_LOWER" | grep -q "webrip";         then FILE_TYPE="WEBRip"
+          elif echo "$DL_LOWER" | grep -qE "web-dl|webdl|web\.dl"; then FILE_TYPE="WebDL"
+          elif echo "$DL_LOWER" | grep -q "hdtv";           then FILE_TYPE="HDTV"
+          else FILE_TYPE="WebDL"
+          fi
 
-          # Build quality ladder JSON array
+          echo "🎬 Movie : $MOVIE_NAME ($IMDB)"
+          echo "🔗 Link  : $DL_LINK"
+          echo "📦 Type  : $FILE_TYPE"
+
+          # ── Download the full video ──────────────────────────────────────────
+          mkdir -p /tmp/moviepluz
+          echo "⬇️ Downloading video..."
+          curl -L --retry 3 --retry-delay 5 \
+               -H "User-Agent: Mozilla/5.0" \
+               -o /tmp/moviepluz/input_video.mp4 \
+               "$DL_LINK"
+          echo "✅ Download complete: $(du -sh /tmp/moviepluz/input_video.mp4)"
+
+          # ── Probe resolution ─────────────────────────────────────────────────
+          SRC_H=$(ffprobe -v error -select_streams v:0 \
+            -show_entries stream=height \
+            -of default=noprint_wrappers=1:nokey=1 \
+            /tmp/moviepluz/input_video.mp4 2>/dev/null || echo "1080")
+          echo "📐 Source height: ${SRC_H}p"
+
+          # ── Build quality ladder ─────────────────────────────────────────────
           if   [ "$SRC_H" -ge 2160 ]; then MATRIX='{"quality":[2160,1080,720,480]}'
           elif [ "$SRC_H" -ge 1080 ]; then MATRIX='{"quality":[1080,720,480]}'
           elif [ "$SRC_H" -ge  720 ]; then MATRIX='{"quality":[720,480]}'
           else                              MATRIX='{"quality":[480]}'
           fi
 
-          echo "matrix=$MATRIX"       >> "$GITHUB_OUTPUT"
-          echo "movie_name=$MOVIE_NAME" >> "$GITHUB_OUTPUT"
-          echo "imdb=$IMDB"           >> "$GITHUB_OUTPUT"
-          echo "dl_link=$DL_LINK"     >> "$GITHUB_OUTPUT"
-          echo "subtitle_link=$SUB_LINK" >> "$GITHUB_OUTPUT"
-          echo "backdrop=$BACKDROP"   >> "$GITHUB_OUTPUT"
+          VIDEO_FILENAME="input_video.mp4"
 
+          echo "matrix=$MATRIX"              >> "$GITHUB_OUTPUT"
+          echo "movie_name=$MOVIE_NAME"      >> "$GITHUB_OUTPUT"
+          echo "imdb=$IMDB"                  >> "$GITHUB_OUTPUT"
+          echo "video_filename=$VIDEO_FILENAME" >> "$GITHUB_OUTPUT"
+          echo "subtitle_link=$SUB_LINK"     >> "$GITHUB_OUTPUT"
+          echo "backdrop=$BACKDROP"          >> "$GITHUB_OUTPUT"
+          echo "file_type=$FILE_TYPE"        >> "$GITHUB_OUTPUT"
           echo "✅ Matrix: $MATRIX"
-          echo "✅ Movie : $MOVIE_NAME ($IMDB)"
 
-  # ── Step 2: Burn each quality in parallel (matrix) ────────────────────────
+      - name: Upload video as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-video
+          path: /tmp/moviepluz/input_video.mp4
+          retention-days: 1
+          if-no-files-found: error
+
+  # ── Step 2: Burn each quality in parallel (matrix) ────────────────────────────
   burn:
     name: 🔥 Burn ${{ matrix.quality }}p
     needs: prepare
@@ -89,31 +124,39 @@ jobs:
           echo "✅ Python packages installed"
 
       - name: Prepare working directory
+        run: mkdir -p /tmp/moviepluz
+
+      - name: Download shared video artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: source-video
+          path: /tmp/moviepluz
+
+      - name: Verify video
         run: |
-          mkdir -p /tmp/moviepluz
-          echo "WORK_DIR=/tmp/moviepluz" >> $GITHUB_ENV
+          ls -lh /tmp/moviepluz/input_video.mp4
+          echo "✅ Video ready for encoding"
 
       - name: Run burn pipeline — ${{ matrix.quality }}p
         env:
-          API_ID:        ${{ secrets.API_ID }}
-          API_HASH:      ${{ secrets.API_HASH }}
-          SESSION_CODE:  ${{ secrets.SESSION_CODE }}
-          ABYSS_API_KEY: ${{ secrets.ABYSS_API_KEY }}
-          CHAT_ID:       ${{ secrets.CHAT_ID }}
-          BOT_TOKEN:     ${{ secrets.BOT_TOKEN }}
-          LOG_CHAT_ID:   ${{ secrets.LOG_CHAT_ID }}
-          GH_TOKEN:      ${{ secrets.GH_PAT }}
-          GH_REPO:       ${{ github.repository }}
-          WORK_DIR:      /tmp/moviepluz
-          # ── Movie details passed from prepare job ──
-          QUALITY:       ${{ matrix.quality }}
-          MOVIE_DL_LINK: ${{ needs.prepare.outputs.dl_link }}
+          API_ID:         ${{ secrets.API_ID }}
+          API_HASH:       ${{ secrets.API_HASH }}
+          SESSION_CODE:   ${{ secrets.SESSION_CODE }}
+          ABYSS_API_KEY:  ${{ secrets.ABYSS_API_KEY }}
+          CHAT_ID:        ${{ secrets.CHAT_ID }}
+          BOT_TOKEN:      ${{ secrets.BOT_TOKEN }}
+          LOG_CHAT_ID:    ${{ secrets.LOG_CHAT_ID }}
+          GH_TOKEN:       ${{ secrets.GH_PAT }}
+          GH_REPO:        ${{ github.repository }}
+          WORK_DIR:       /tmp/moviepluz
+          QUALITY:        ${{ matrix.quality }}
+          MOVIE_NAME:     ${{ needs.prepare.outputs.movie_name }}
+          MOVIE_IMDB:     ${{ needs.prepare.outputs.imdb }}
           MOVIE_SUB_LINK: ${{ needs.prepare.outputs.subtitle_link }}
-          MOVIE_NAME:    ${{ needs.prepare.outputs.movie_name }}
-          MOVIE_IMDB:    ${{ needs.prepare.outputs.imdb }}
           MOVIE_BACKDROP: ${{ needs.prepare.outputs.backdrop }}
-        run: |
-          python pipeline.py
+          MOVIE_FILE_TYPE: ${{ needs.prepare.outputs.file_type }}
+          VIDEO_PATH:     /tmp/moviepluz/input_video.mp4
+        run: python pipeline.py
 
       - name: Upload error logs (on failure)
         if: failure()
