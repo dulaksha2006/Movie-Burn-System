@@ -645,12 +645,13 @@ def main():
 
     tg_log(f"🎉 Encodes done!\n✅ Burned: {list(burned_files.keys())}\n✅ Plain: {list(plain_files.keys())}")
 
-    # ── Abyss: upload ONLY highest quality burned file ────────────────────────
+    # ── Abyss: upload ONLY 1080p burned file ──────────────────────────────────
     abyss_link = None
-    if burned_files and ABYSS_API_KEY:
-        best_q = max(burned_files.keys())
-        tg_log(f"☁️ Abyss upload: <b>{best_q}p</b> burned (highest quality only)")
-        abyss_link = upload_to_abyss(burned_files[best_q], ABYSS_API_KEY)
+    if burned_files and ABYSS_API_KEY and TARGET_QUALITY == 1080:
+        tg_log(f"☁️ Abyss upload: <b>1080p</b> burned only")
+        abyss_link = upload_to_abyss(burned_files[1080], ABYSS_API_KEY)
+    elif burned_files and ABYSS_API_KEY and TARGET_QUALITY != 1080:
+        tg_log(f"ℹ️ Skipping Abyss upload — only 1080p job uploads to Abyss (current: {TARGET_QUALITY}p)")
 
     # ── Telegram: upload plain while next burned is encoding (sequential) ─────
     import nest_asyncio; nest_asyncio.apply()
