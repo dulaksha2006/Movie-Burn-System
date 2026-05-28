@@ -52,7 +52,7 @@ jobs:
           # ── Download the full video ──────────────────────────────────────────
           mkdir -p /tmp/moviepluz
           echo "⬇️ Downloading video..."
-          curl -L --retry 3 --retry-delay 5 \
+          curl -L --globoff --retry 3 --retry-delay 5 \
                -H "User-Agent: Mozilla/5.0" \
                -o /tmp/moviepluz/input_video.mp4 \
                "$DL_LINK"
