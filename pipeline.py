@@ -424,14 +424,14 @@ async def tg_upload_all(burned_files, plain_files, thumbnail_path, abyss_link, m
                 upload_start = [time.time()]
                 last_tg_t = [0]
 
-                def make_plain_progress(fsize, eq_key, eq, ei, us):
+                def make_plain_progress(fsize, eq_key, eq, ei, us, lt):
                     def cb(cur, tot):
                         elapsed = time.time() - us[0]
                         speed = cur / elapsed if elapsed > 0 else 0
                         eta = (fsize - cur) / speed if speed > 0 else 0
                         pct = cur / fsize * 100 if fsize else 0
-                        if time.time() - last_tg_t[0] > 8:
-                            last_tg_t[0] = time.time()
+                        if time.time() - lt[0] > 8:
+                            lt[0] = time.time()
                             tg_log(
                                 f"{ei} <b>{eq}p | No Subtitles</b>\n"
                                 f"{make_progress_bar(pct)}\n"
@@ -452,7 +452,7 @@ async def tg_upload_all(burned_files, plain_files, thumbnail_path, abyss_link, m
                     height=height,
                     thumb=thumb,
                     supports_streaming=True,
-                    progress=make_plain_progress(file_size, edit_key, quality, icon, upload_start)
+                    progress=make_plain_progress(file_size, edit_key, quality, icon, upload_start, last_tg_t)
                 )
 
                 tg_log(
@@ -494,14 +494,14 @@ async def tg_upload_all(burned_files, plain_files, thumbnail_path, abyss_link, m
                 upload_start_b = [time.time()]
                 last_tg_b = [0]
 
-                def make_burned_progress(fsize, eq_key, eq, ei, us):
+                def make_burned_progress(fsize, eq_key, eq, ei, us, lt):
                     def cb(cur, tot):
                         elapsed = time.time() - us[0]
                         speed = cur / elapsed if elapsed > 0 else 0
                         eta = (fsize - cur) / speed if speed > 0 else 0
                         pct = cur / fsize * 100 if fsize else 0
-                        if time.time() - last_tg_b[0] > 8:
-                            last_tg_b[0] = time.time()
+                        if time.time() - lt[0] > 8:
+                            lt[0] = time.time()
                             tg_log(
                                 f"{ei} <b>{eq}p | 🔥 Sinhala Subtitles</b>\n"
                                 f"{make_progress_bar(pct)}\n"
@@ -522,7 +522,7 @@ async def tg_upload_all(burned_files, plain_files, thumbnail_path, abyss_link, m
                     height=height,
                     thumb=thumb,
                     supports_streaming=True,
-                    progress=make_burned_progress(file_size, edit_key, quality, icon, upload_start_b)
+                    progress=make_burned_progress(file_size, edit_key, quality, icon, upload_start_b, last_tg_b)
                 )
 
                 tg_log(
@@ -597,7 +597,9 @@ def main():
     size_mb = os.path.getsize(input_video) / 1e6
     tg_log(f"✅ Video ready from artifact: <code>{input_video}</code> ({size_mb:.1f} MB)")
 
-    notify_grand_movie(imdb)
+    # notify_grand_movie only from highest quality job to avoid granded conflict
+    if not TARGET_QUALITY or TARGET_QUALITY == max(all_qualities):
+        notify_grand_movie(imdb)
 
     srt_path = download_file(subtitle_url, f"{WORK_DIR}/subtitles.srt", "Subtitle")
     thumbnail_path = None
@@ -654,7 +656,9 @@ def main():
     import nest_asyncio; nest_asyncio.apply()
     asyncio.run(tg_upload_all(burned_files, plain_files, thumbnail_path, abyss_link, movie_name))
 
-    notify_uploaded_movie(imdb)
+    # notify_uploaded_movie only from highest quality job
+    if not TARGET_QUALITY or TARGET_QUALITY == max(all_qualities):
+        notify_uploaded_movie(imdb)
 
     cleanup_files = [srt_path] + ([thumbnail_path] if thumbnail_path else []) + list(burned_files.values()) + list(plain_files.values())
     cleanup(cleanup_files)
