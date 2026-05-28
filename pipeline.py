@@ -68,23 +68,29 @@ API_HASH      = _cfg.API_HASH
 SESSION_CODE  = _cfg.SESSION_CODE
 ABYSS_API_KEY = _cfg.ABYSS_API_KEY
 
-# ── Fix CHAT_ID: Pyrogram needs -100XXXXXXXXXX format ──────────────────────
+# ── Fix CHAT_ID: Pyrogram needs -100XXXXXXXXXX format or @username ──────────
 _raw_chat_id = _cfg.CHAT_ID
 if isinstance(_raw_chat_id, str):
-    _raw_chat_id = int(_raw_chat_id.strip())
-# If it looks like a bare supergroup ID without -100 prefix, add it
-_chat_id_str = str(_raw_chat_id)
-if _chat_id_str.startswith("-100"):
+    _raw_chat_id = _raw_chat_id.strip()
+
+# If it's a username (starts with @) or non-numeric string, use as-is
+if isinstance(_raw_chat_id, str) and (
+    _raw_chat_id.startswith("@") or not _raw_chat_id.lstrip("-").isdigit()
+):
     CHAT_ID = _raw_chat_id
-elif _chat_id_str.startswith("-"):
-    # e.g. -3978357179 → might need -100 prefix
-    inner = _chat_id_str[1:]
-    if len(inner) >= 10:
-        CHAT_ID = int(f"-100{inner}")
+else:
+    _raw_chat_id = int(_raw_chat_id)
+    _chat_id_str = str(_raw_chat_id)
+    if _chat_id_str.startswith("-100"):
+        CHAT_ID = _raw_chat_id
+    elif _chat_id_str.startswith("-"):
+        inner = _chat_id_str[1:]
+        if len(inner) >= 10:
+            CHAT_ID = int(f"-100{inner}")
+        else:
+            CHAT_ID = _raw_chat_id
     else:
         CHAT_ID = _raw_chat_id
-else:
-    CHAT_ID = _raw_chat_id
 
 WORK_DIR  = os.environ.get("WORK_DIR", "/tmp/moviepluz")
 FONT_PATH = f"{WORK_DIR}/NotoSansSinhala.ttf"
