@@ -6,7 +6,7 @@
 # ── Telegram Bot ─────────────────────────────────────
 BOT_TOKEN    = "8939324222:AAFICPbTz3-a-Nf7achi5lhnW6eaBTwC6gE"
 LOG_CHAT_ID  = "7461323321"
-CHAT_ID      = -1003978357179
+CHAT_ID      = "-1003978357179"
 
 # ── Telegram User Account (Telethon) ─────────────────
 API_ID       = 21436919
