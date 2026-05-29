@@ -14,7 +14,13 @@ API_HASH     = "6f289f8dccefd28e2d8077fd05568004"
 SESSION_CODE = "BQFHGfcAiPxBCoQN9pZsWAsAD2U82dfr5wJ1u9ZbbRQJSNnyZeyVC4_gpRMCj8AV0hdx6ElZnPuSX6xQKHOos5tx7b5Zgc8ZfC8a0Z1CETWyrBLYWgkNGOY3aHQKMnzX3SW5YBAV_BruDAPMn3_w3OUhMCjJ0zj0oPiQ83WuGlNWfxrUAapDn4JgIjG4Gn5l9YFUFmnbdqPT5_hgaf5cfrfwPmoKA8RFBopOLSV5duVb-o4KlmvCfQpgzb5vJgFnF_p8KlqCRPXarZaCOBq08R49KcTeVD4D7Tz96_9zwz2qKn_1gMNhOtuTq1HhpQnDKD85uYEtvgFxtxbMxUN8ieeX4MXsuAAAAAG8usI5AA"
 
 # ── Abyss.to ─────────────────────────────────────────
+# Upload API key — get from https://abyss.to/account
 ABYSS_API_KEY = "af3a445e1825a2b8256fc918c6087381"
+
+# ── Pixeldrain ────────────────────────────────────────
+# API key — get from https://pixeldrain.com/user/settings
+# Leave empty "" to disable Pixeldrain uploads
+PIXELDRAIN_API_KEY = "b2e643ad-fbeb-4682-b92e-37b4f4f4cbc8"
 
 # ── Cloudflare Worker Secret ──────────────────────────
 PIPELINE_SECRET = "af3a445e1825a2b8256fc918c6087381"
