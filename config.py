@@ -4,7 +4,7 @@
 # ════════════════════════════════════════════════════
 
 # ── Telegram Bot ─────────────────────────────────────
-BOT_TOKEN    = "8939324222:AAFICPbTz3-a-Nf7achi5lhnW6eaBTwC6gE"
+BOT_TOKEN    = "8781032098:AAE0nGZ9yyQQEt136JFQV7QTr1XzuT3gsVg"
 LOG_CHAT_ID  = "7461323321"
 CHAT_ID      = "@moviepluz_database"
 
