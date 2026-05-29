@@ -71,7 +71,8 @@ ABYSS_UPLOAD_URL   = "http://up.abyss.to"
 API_ID        = _cfg.API_ID
 API_HASH      = _cfg.API_HASH
 SESSION_CODE  = _cfg.SESSION_CODE
-ABYSS_API_KEY = _cfg.ABYSS_API_KEY
+ABYSS_API_KEY      = _cfg.ABYSS_API_KEY
+PIXELDRAIN_API_KEY = getattr(_cfg, "PIXELDRAIN_API_KEY", "")
 
 # ── Fix CHAT_ID: Pyrogram needs -100XXXXXXXXXX format or @username ──────────
 _raw_chat_id = _cfg.CHAT_ID
@@ -183,6 +184,16 @@ def get_duration(path):
     p = subprocess.run(["ffprobe","-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",path], capture_output=True, text=True)
     try: return float(p.stdout.strip())
     except: return 0
+
+def is_x265(video_path):
+    """Returns True if the video is encoded with x265/HEVC."""
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=codec_name", "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+        capture_output=True, text=True
+    )
+    codec = probe.stdout.strip().lower()
+    return codec in ("hevc", "h265", "x265")
 
 def build_quality_ladder(src_h):
     if src_h >= 1920:  return [2160, 1080, 720, 480]
@@ -418,7 +429,100 @@ def upload_to_abyss(file_path, api_key):
         )
         return None
 
-# ─── Telegram upload ──────────────────────────────────────────────────────────
+# ─── Pixeldrain upload ────────────────────────────────────────────────────────
+
+def upload_to_pixeldrain(file_path, api_key):
+    fname = os.path.basename(file_path)
+    file_size = os.path.getsize(file_path)
+    upload_url = f"https://pixeldrain.com/api/file/{fname}"
+
+    tg_log(
+        f"🟣 <b>Pixeldrain Upload</b>\n"
+        f"📄 {fname}\n"
+        f"📦 {format_size(file_size)}\n"
+        f"⏳ Status: Uploading...",
+        edit_key=f"pd_{fname[:20]}"
+    )
+
+    start = time.time()
+    last_tg = [0]
+
+    def _do_upload():
+        with open(file_path, "rb") as f:
+            if HAS_TOOLBELT:
+                encoder = MultipartEncoder(
+                    fields={"file": (fname, f, "video/mp4")}
+                )
+
+                def _progress_cb(monitor):
+                    pct = monitor.bytes_read / file_size * 100 if file_size else 0
+                    elapsed = time.time() - start
+                    speed = monitor.bytes_read / elapsed if elapsed > 0 else 0
+                    eta = (file_size - monitor.bytes_read) / speed if speed > 0 else 0
+                    if time.time() - last_tg[0] > 15:
+                        last_tg[0] = time.time()
+                        tg_log(
+                            f"🟣 <b>Pixeldrain Upload</b>\n"
+                            f"📄 {fname}\n"
+                            f"{make_progress_bar(pct)}\n"
+                            f"📦 {format_size(monitor.bytes_read)} / {format_size(file_size)}\n"
+                            f"⚡ {speed/1e6:.2f} MB/s  |  ⏳ ETA: {format_eta(eta)}",
+                            edit_key=f"pd_{fname[:20]}"
+                        )
+
+                monitor = MultipartEncoderMonitor(encoder, _progress_cb)
+                resp = requests.put(
+                    upload_url,
+                    data=monitor,
+                    headers={"Content-Type": monitor.content_type},
+                    auth=("", api_key),
+                    timeout=3600
+                )
+            else:
+                resp = requests.put(
+                    upload_url,
+                    files={"file": (fname, f, "video/mp4")},
+                    auth=("", api_key),
+                    timeout=3600
+                )
+        return resp
+
+    for attempt in range(1, 4):
+        try:
+            resp = _do_upload()
+            break
+        except requests.exceptions.RequestException as e:
+            tg_log(f"⚠️ Pixeldrain upload attempt {attempt}/3 failed: {e}", edit_key=f"pd_{fname[:20]}")
+            if attempt == 3:
+                tg_log_error(f"Pixeldrain upload failed after 3 attempts: {e}")
+                return None
+            time.sleep(5 * attempt)
+
+    if resp.status_code in (200, 201):
+        try:
+            data = resp.json()
+        except ValueError:
+            tg_log_error(f"Pixeldrain returned non-JSON: {resp.text[:500]}")
+            return None
+        file_id = data.get("id") or data.get("file_id") or str(data)
+        link = f"https://pixeldrain.com/u/{file_id}"
+        elapsed = time.time() - start
+        tg_log(
+            f"✅ <b>Pixeldrain Upload Done!</b>\n"
+            f"📄 {fname}\n"
+            f"📦 {format_size(file_size)}  |  ⏱ {elapsed:.0f}s\n"
+            f"🔗 {link}",
+            edit_key=f"pd_{fname[:20]}"
+        )
+        return link
+    else:
+        tg_log_error(
+            f"Pixeldrain upload failed: HTTP {resp.status_code}\n"
+            f"Response: {resp.text[:500]}"
+        )
+        return None
+
+
 # Logic:
 #   1. Upload highest-quality burned file to Abyss first (caller handles this)
 #   2. While a quality's burned file is encoding, upload its plain version first
@@ -426,7 +530,7 @@ def upload_to_abyss(file_path, api_key):
 #   4. Per-quality: 1 message for burned (1080p/720p/480p), updated with live progress
 #   5. Separate message per quality — total 3 messages (one per quality)
 
-async def tg_upload_all(burned_files, plain_files, thumbnail_path, abyss_link, movie_name):
+async def tg_upload_all(burned_files, plain_files, thumbnail_path, abyss_link, pixeldrain_links, movie_name):
     import cv2
     from pyrogram import Client
 
@@ -453,11 +557,14 @@ async def tg_upload_all(burned_files, plain_files, thumbnail_path, abyss_link, m
                 duration, width, height = _get_video_meta(file_path)
                 thumb = thumbnail_path if (thumbnail_path and os.path.exists(thumbnail_path)) else None
 
+                plain_path_key = plain_files.get(quality, "")
+                pd_plain_link  = pixeldrain_links.get(plain_path_key, "") if plain_path_key else ""
                 caption = (
                     f"{icon} <b>{movie_name}</b>\n"
                     f"📺 Quality: <b>{quality}p</b>\n"
                     f"📝 Type: <b>No Subtitles</b>\n"
                     f"📦 Size: {format_size(file_size)}"
+                    + (f"\n🟣 Pixeldrain: {pd_plain_link}" if pd_plain_link else "")
                 )
 
                 tg_log(
@@ -528,6 +635,9 @@ async def tg_upload_all(burned_files, plain_files, thumbnail_path, abyss_link, m
                 ]
                 if abyss_link and quality == max(burned_files.keys()):
                     caption_parts.append(f"☁️ Abyss: {abyss_link}")
+                pd_key = burned_files.get(quality, "")
+                if pd_key and pixeldrain_links.get(pd_key):
+                    caption_parts.append(f"🟣 Pixeldrain: {pixeldrain_links[pd_key]}")
                 caption = "\n".join(caption_parts)
 
                 tg_log(
@@ -678,32 +788,91 @@ def main():
     total_secs = get_duration(input_video)
     burned_files, plain_files = {}, {}
 
+    # ── x265 detection — convert to x264 if source is HEVC ───────────────────
+    src_is_x265 = is_x265(input_video)
+    if src_is_x265:
+        tg_log("⚠️ Source is <b>x265/HEVC</b> — plain files will be re-encoded to x264.")
+    else:
+        tg_log("✅ Source is x264 — plain same-resolution file will be stream-copied.")
+
+    # ── Pixeldrain links: file_path → link ────────────────────────────────────
+    pixeldrain_links = {}
+    abyss_link_ref   = [None]   # mutable so background thread can write back
+    import threading
+
+    def _upload_burned_background(q, b_path):
+        """Runs in a thread: Abyss (1080p only) + Pixeldrain for a burned file."""
+        if ABYSS_API_KEY and q == 1080:
+            tg_log(f"☁️ Abyss upload: <b>1080p</b> burned (background)")
+            link = upload_to_abyss(b_path, ABYSS_API_KEY)
+            if link:
+                abyss_link_ref[0] = link
+        if PIXELDRAIN_API_KEY:
+            pd_link = upload_to_pixeldrain(b_path, PIXELDRAIN_API_KEY)
+            if pd_link:
+                pixeldrain_links[b_path] = pd_link
+
     for q in qualities:
         w, h = RES_MAP[q]; crf = CRF_MAP[q]; scale = f"scale=-2:{h}"
         burned_path = os.path.join(WORK_DIR, make_filename(movie_name, q, file_type, burned=True))
         plain_path  = os.path.join(WORK_DIR, make_filename(movie_name, q, file_type, burned=False))
         ass_esc = ass_files[q].replace("\\", "/").replace(":", "\\:")
         vf_burn = f"{scale},ass={ass_esc}:fontsdir={WORK_DIR}"
-        if run_ffmpeg(["ffmpeg","-y","-i",input_video,"-vf",vf_burn,"-c:v","libx264","-pix_fmt","yuv420p","-crf",str(crf),"-c:a","copy","-progress","pipe:1","-nostats",burned_path], total_secs, f"Burn {q}p"):
+
+        # 1️⃣  Encode burned file
+        burn_ok = run_ffmpeg(
+            ["ffmpeg", "-y", "-i", input_video, "-vf", vf_burn,
+             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", str(crf),
+             "-c:a", "copy", "-progress", "pipe:1", "-nostats", burned_path],
+            total_secs, f"Burn {q}p"
+        )
+        if burn_ok:
             burned_files[q] = burned_path
-        cmd_plain = ["ffmpeg","-y","-i",input_video,"-c","copy","-progress","pipe:1","-nostats",plain_path] if h == src_h else \
-                    ["ffmpeg","-y","-i",input_video,"-vf",scale,"-c:v","libx264","-pix_fmt","yuv420p","-crf",str(crf),"-c:a","copy","-progress","pipe:1","-nostats",plain_path]
-        if run_ffmpeg(cmd_plain, total_secs, f"Plain {q}p"):
+
+        # 2️⃣  Start uploading burned file in background thread
+        upload_thread = None
+        if burn_ok:
+            upload_thread = threading.Thread(
+                target=_upload_burned_background,
+                args=(q, burned_path),
+                daemon=True
+            )
+            upload_thread.start()
+            tg_log(f"⚙️ <b>Plain {q}p</b> encoding while burned uploads in background...")
+
+        # 3️⃣  Build plain encode command
+        if h == src_h and not src_is_x265:
+            # Same resolution + x264 source → fast stream copy
+            cmd_plain = ["ffmpeg", "-y", "-i", input_video,
+                         "-c", "copy", "-progress", "pipe:1", "-nostats", plain_path]
+        else:
+            # Different resolution OR x265 source → re-encode to x264
+            cmd_plain = ["ffmpeg", "-y", "-i", input_video,
+                         "-vf", scale, "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                         "-crf", str(crf), "-c:a", "copy",
+                         "-progress", "pipe:1", "-nostats", plain_path]
+
+        plain_ok = run_ffmpeg(cmd_plain, total_secs, f"Plain {q}p")
+        if plain_ok:
             plain_files[q] = plain_path
 
-    tg_log(f"🎉 Encodes done!\n✅ Burned: {list(burned_files.keys())}\n✅ Plain: {list(plain_files.keys())}")
+        # 4️⃣  Pixeldrain for plain file (after plain encode, before thread join)
+        if plain_ok and PIXELDRAIN_API_KEY:
+            pd_link = upload_to_pixeldrain(plain_path, PIXELDRAIN_API_KEY)
+            if pd_link:
+                pixeldrain_links[plain_path] = pd_link
 
-    # ── Abyss: upload ONLY 1080p burned file ──────────────────────────────────
-    abyss_link = None
-    if burned_files and ABYSS_API_KEY and TARGET_QUALITY == 1080:
-        tg_log(f"☁️ Abyss upload: <b>1080p</b> burned only")
-        abyss_link = upload_to_abyss(burned_files[1080], ABYSS_API_KEY)
-    elif burned_files and ABYSS_API_KEY and TARGET_QUALITY != 1080:
-        tg_log(f"ℹ️ Skipping Abyss upload — only 1080p job uploads to Abyss (current: {TARGET_QUALITY}p)")
+        # 5️⃣  Wait for burned upload thread before next quality
+        if upload_thread and upload_thread.is_alive():
+            tg_log(f"⏳ Waiting for burned {q}p upload to finish...")
+            upload_thread.join()
 
-    # ── Telegram: upload plain while next burned is encoding (sequential) ─────
+    abyss_link = abyss_link_ref[0]
+    tg_log(f"🎉 Encodes + cloud uploads done!\n✅ Burned: {list(burned_files.keys())}\n✅ Plain: {list(plain_files.keys())}")
+
+    # ── Telegram upload ───────────────────────────────────────────────────────
     import nest_asyncio; nest_asyncio.apply()
-    asyncio.run(tg_upload_all(burned_files, plain_files, thumbnail_path, abyss_link, movie_name))
+    asyncio.run(tg_upload_all(burned_files, plain_files, thumbnail_path, abyss_link, pixeldrain_links, movie_name))
 
     # notify_uploaded_movie only from highest quality job
     if not TARGET_QUALITY or TARGET_QUALITY == max(all_qualities):
